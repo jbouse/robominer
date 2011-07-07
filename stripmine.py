@@ -52,12 +52,30 @@ def Miner(device, options):
 
 		miner.mine()
 
-try:
-	cParser = ConfigParser.SafeConfigParser()
-	cParser.read('stripmine.cfg')
-except ConfigParser.ParsingError, err:
-	print 'Could not parse:', err
-	sys.exit(1)
+def main():
+	oParser = OptionParser(version=USER_AGENT,
+			description='Bitcoin strip mining daemon')
+	oParser.add_option('-c', '--config', action='store',
+		dest='configfile', default='stripmine.cfg')
+	oParser.add_option('-p', '--pool', action='store',
+		dest='pool', default=None)
+	(options, args) = oParser.parse_args()
 
-oParser = OptionParser(version=USER_AGENT)
+	try:
+		cParser = ConfigParser.SafeConfigParser()
+		cParser.read([options.configfile, os.path.expanduser('~/.stripmine.cfg')])
+	except ConfigParser.ParsingError, err:
+		print 'Could not parse:', err
+		sys.exit(1)
 
+	# Define default settings
+	for opt, val in cParser.defaults().iteritems():
+		setattr(options, opt, val)
+
+	# Define pool specific values if specified and available
+	if cParser.has_section('pool_%s' % options.pool):
+		for opt in cParser.options('pool_%s' % options.pool):
+			setattr(options, opt, cParser.get('pool_%s' % options.pool, opt))
+
+if __name__ == '__main__':
+	main()
