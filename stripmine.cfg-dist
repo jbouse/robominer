@@ -1,6 +1,8 @@
+### Default settings and serves as default pool 
+### configuration for StripMiner
 [DEFAULT]
 user = bitcoin
-pass = password
+password = password
 host = 127.0.0.1
 port = 8332
 rate = 1
@@ -10,4 +12,20 @@ worksize = -1
 vectors = True
 proxy = None
 verbose = True
+logfile = /tmp/stripmine
+
+### Example of specifying a pool which can be used
+### by calling with '-p eligius' on startup
+# [pool_eligius]
+# user = <bitcoin address>
+# password = x
+# host = mining.eligius.st
+# port = 8337
+
+### Example of specifying settings for GPU of
+### card on index 0
+# [ADL_GPU0]
+# core = 975
+# memory = 300
+# fan = 100
 
