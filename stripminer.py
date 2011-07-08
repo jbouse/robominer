@@ -18,11 +18,11 @@ except ImportError:
 	print "pyADL can be found at: http://www.bitshift.io/pyADL/"
 	sys.exit(1)
 
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 VERSION = '2011.07.06'
 
 USER_AGENT = 'stripminer/' + VERSION
-
-TIMEOUT = 10
 
 LOG_LEVEL = logging.DEBUG
 LOG_FORMAT = '%(asctime)s %(name)-10s %(levelname)-8s %(message)s'
@@ -121,12 +121,16 @@ def main():
 			if cParser.has_option('ADL_GPU%d' % gpuidx, 'core'):
 				core = cParser.getint('ADL_GPU%d' % gpuidx, 'core')
 				log.debug('Device[GPU%d] setting Core to %d Mhz', gpuidx, core)
+				ADL.setCoreClockSpeed(2, core)
 			if cParser.has_option('ADL_GPU%d' % gpuidx, 'memory'):
 				memory = cParser.getint('ADL_GPU%d' % gpuidx, 'memory')
 				log.debug('Device[GPU%d] setting Memory to %d Mhz', gpuidx, memory)
+				ADL.setMemoryClockSpeed(1, memory)
+				ADL.setMemoryClockSpeed(2, memory)
 			if cParser.has_option('ADL_GPU%d' % gpuidx, 'fan'):
 				fan = cParser.getint('ADL_GPU%d' % gpuidx, 'fan')
 				log.debug('Device[GPU%d] setting Fan to %d%%', gpuidx, fan)
+				ADL.setFanSpeed(fan)
 
 		p = Process(target=Miner, args=(gpuidx, options))
 		processes.append(p)
