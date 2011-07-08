@@ -25,7 +25,7 @@ VERSION = '2011.07.06'
 USER_AGENT = 'stripminer/' + VERSION
 
 LOG_LEVEL = logging.DEBUG
-LOG_FORMAT = '%(asctime)s %(name)-10s %(levelname)-8s %(message)s'
+LOG_FORMAT = '%(asctime)s %(name)-10s %(message)s'
 LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
 
 def Miner(device, options):
