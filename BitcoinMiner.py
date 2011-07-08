@@ -93,7 +93,7 @@ class NotAuthorized(Exception): pass
 class RPCError(Exception): pass
 
 class BitcoinMiner():
-	def __init__(self, device, host, user, password, port=8332, frames=30, rate=1, askrate=5, worksize=-1, vectors=False, verbose=False, proxy=None):
+	def __init__(self, device, host, user, password, port=8332, frames=30, rate=1, askrate=5, worksize=-1, vectors=False, verbose=False):
 		(self.defines, self.rateDivisor, self.hashspace) = if_else(vectors, ('-DVECTORS', 500, 0x7FFFFFFF), ('', 1000, 0xFFFFFFFF))
 		self.defines += (' -DOUTPUT_SIZE=' + str(OUTPUT_SIZE))
 		self.defines += (' -DOUTPUT_MASK=' + str(OUTPUT_SIZE - 1))
@@ -119,10 +119,6 @@ class BitcoinMiner():
 		self.resultQueue = Queue()
 
 		self.host = '%s:%s' % (host.replace('http://', ''), port)
-		if proxy is None:
-			self.proxy = proxy
-		else:
-			self.proxy = '%s' % proxy.replace('http://', '')
 		self.postdata = {"method": 'getwork', 'id': 'json'}
 		self.headers = {"User-Agent": USER_AGENT, "Authorization": 'Basic ' + b64encode('%s:%s' % (user, password))}
 		self.connection = None
@@ -231,17 +227,11 @@ class BitcoinMiner():
 		try:
 
 			if not self.connection:
-				if self.proxy is None:
-					self.connection = httplib.HTTPConnection(self.host, strict=True, timeout=TIMEOUT)
-				else:
-					self.connection = httplib.HTTPConnection(self.proxy, strict=True, timeout=TIMEOUT)
+				self.connection = httplib.HTTPConnection(self.host, strict=True, timeout=TIMEOUT)
 			if data is None:
 				self.getworkCount += 1
 			self.postdata['params'] = if_else(data, [data], [])
-			if self.proxy is None:
-				(self.connection, result) = self.request(self.connection, '/', self.headers, dumps(self.postdata))
-			else:
-				(self.connection, result) = self.request(self.connection, 'http://%s/' % self.host, self.headers, dumps(self.postdata))
+			(self.connection, result) = self.request(self.connection, '/', self.headers, dumps(self.postdata))
 			return result['result']
 		except NotAuthorized:
 			self.failure('Wrong username or password')
@@ -290,15 +280,9 @@ class BitcoinMiner():
 					if url == '': url = '/'
 				try:
 					if not connection:
-						if self.proxy is None:
-							connection = httplib.HTTPConnection(host, timeout=LONG_POLL_TIMEOUT)
-						else:
-							connection = httplib.HTTPConnection(self.proxy, timeout=LONG_POLL_TIMEOUT)
+						connection = httplib.HTTPConnection(host, timeout=LONG_POLL_TIMEOUT)
 					self.longPollActive = True
-					if self.proxy is None:
-						(connection, result) = self.request(connection, url, self.headers)
-					else:
-						(connection, result) = self.request(connection, 'http://%s%s' % (host, url), self.headers)
+					(connection, result) = self.request(connection, url, self.headers)
 					self.longPollActive = False
 					self.queueWork(result['result'])
 					self.sayLine('long poll: new block %s%s', (result['result']['data'][56:64], result['result']['data'][48:56]))
