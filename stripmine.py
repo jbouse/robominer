@@ -3,7 +3,6 @@
 from multiprocessing import Process
 from optparse import OptionParser
 import ConfigParser 
-import ADL
 import os, sys, logging
 import pyopencl as cl
 from struct import *
@@ -11,6 +10,13 @@ from time import sleep, time, strftime
 from datetime import datetime
 
 from BitcoinMiner import *
+
+try:
+	import ADL
+except ImportError:
+	print "Missing the pyADL module needed for this to work."
+	print "pyADL can be found at: http://www.bitshift.io/pyADL/"
+	sys.exit(1)
 
 VERSION = '2011.07.06'
 
