@@ -72,14 +72,14 @@ def main():
 	oParser = OptionParser(version=USER_AGENT,
 			description='Bitcoin strip mining daemon')
 	oParser.add_option('-c', '--config', action='store',
-		dest='configfile', default='stripmine.cfg')
+		dest='configfile', default='stripminer.cfg')
 	oParser.add_option('-p', '--pool', action='store',
 		dest='pool', default=None)
 	(options, args) = oParser.parse_args()
 
 	try:
 		cParser = ConfigParser.SafeConfigParser()
-		cParser.read([options.configfile, os.path.expanduser('~/.stripmine.cfg')])
+		cParser.read([options.configfile, os.path.expanduser('~/.stripminer.cfg')])
 	except ConfigParser.ParsingError, err:
 		print 'Could not parse:', err
 		sys.exit(1)

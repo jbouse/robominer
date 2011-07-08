@@ -12,7 +12,7 @@ worksize = -1
 vectors = True
 proxy = None
 verbose = True
-logfile = /tmp/stripmine
+logfile = /tmp/stripminer
 
 ### Example of specifying a pool which can be used
 ### by calling with '-p eligius' on startup
