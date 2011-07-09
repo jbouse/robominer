@@ -1,0 +1,2 @@
+MINER_EXEC="/home/mining/robominer/stripminer.py"
+MINER_OPTS=""
