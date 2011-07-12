@@ -3,7 +3,7 @@
 from multiprocessing import Process
 from optparse import OptionParser
 import ConfigParser 
-import os, sys, logging
+import os, sys, logging, logging.config
 import pyopencl as cl
 from struct import *
 from time import sleep, time, strftime
@@ -23,10 +23,6 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 VERSION = '2011.07.06'
 
 USER_AGENT = 'stripminer/' + VERSION
-
-LOG_LEVEL = logging.DEBUG
-LOG_FORMAT = '%(asctime)s %(name)-10s %(message)s'
-LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
 
 def Miner(device, options):
 	log = logging.getLogger('GPU%d-MINER' % device)
@@ -93,14 +89,8 @@ def main():
 		for opt in cParser.options('pool_%s' % options.pool):
 			setattr(options, opt, cParser.get('pool_%s' % options.pool, opt))
 
-	# Setup logging if section is found in config
-	if options.logfile:
-		logfile = options.logfile
-		# logfile += '_' + strftime("%Y-%m-%d_%H%M%S")
-		logfile += '.log'
-		logging.basicConfig(filename=logfile, 
-			level=LOG_LEVEL, format=LOG_FORMAT, datefmt=LOG_DATEFMT)
-
+	# Setup logging
+	logging.config.fileConfig('logging.conf')
 	log = logging.getLogger('stripminer')
 
 	# Collection GPU card information
