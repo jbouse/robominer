@@ -3,7 +3,8 @@
 from multiprocessing import Process
 from optparse import OptionParser
 import ConfigParser 
-import os, sys, logging, logging.config
+import os, sys
+import logging, logging.config
 import pyopencl as cl
 from struct import *
 from time import sleep, time, strftime
