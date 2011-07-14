@@ -33,11 +33,11 @@ USER_AGENT = 'poclbm/' + VERSION
 
 TIME_FORMAT = '%d/%m/%Y %H:%M:%S'
 
-TIMEOUT = 5
+TIMEOUT = 45
 
 LONG_POLL_TIMEOUT = 3600
 
-LONG_POLL_MAX_ASKRATE = 60 - TIMEOUT
+LONG_POLL_MAX_ASKRATE = 100
 
 MAX_REDIRECTS = 3
 
@@ -103,7 +103,7 @@ class BitcoinMiner():
 		self.askrate = max(int(askrate), 1)
 		self.askrate = min(self.askrate, 10)
 		self.worksize = int(worksize)
-		self.frames = max(int(frames), 3)
+		self.frames = max(int(frames), 1)
 		self.verbose = verbose
 		self.longPollActive = self.stop = False
 		self.update = True
