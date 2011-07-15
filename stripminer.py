@@ -21,7 +21,7 @@ except ImportError:
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-VERSION = '2011.07.06'
+VERSION = '2011.07.15'
 
 USER_AGENT = 'stripminer/' + VERSION
 
@@ -48,22 +48,22 @@ def Miner(device, options):
 				self.say(format, args)
 
 	try:
-		miner = StripMiner(devices[device],
-			options.host,
-			options.user,
-			options.password,
-			int(options.port),
-			int(options.frames),
-			float(options.rate),
-			int(options.askrate),
-			int(options.worksize),
-			bool(options.vectors),
-			bool(options.verbose))
+		miner = StripMiner(devices[device], options)
 		miner.mine()
 	except:
 		log.info('Miner is exiting', device)
 	finally:
 		if miner: miner.exit()
+
+def sanitizeOption(options, key, val):
+	if key == "verbose" or key == "quiet" or key == "vectors" or key == "nsf":
+		setattr(options, key, (bool)val)
+	elif key == "rate" or "frameSleep":
+		setattr(options, key, (float)val)
+	elif key == "estimate" or key == "askrate" or key == "tolerance" or key == "failback" or key == "worksize" or key == "frames":
+		setattr(options, key, (int)val)
+	else:
+		setattr(options, key, val)
 
 def main():
 	oParser = OptionParser(version=USER_AGENT,
@@ -83,12 +83,12 @@ def main():
 
 	# Define default settings
 	for opt, val in cParser.defaults().iteritems():
-		setattr(options, opt, val)
+		sanitizeOption(options, opt, val)
 
 	# Define pool specific values if specified and available
 	if cParser.has_section('pool_%s' % options.pool):
 		for opt in cParser.options('pool_%s' % options.pool):
-			setattr(options, opt, cParser.get('pool_%s' % options.pool, opt))
+			sanitizeOption(options, opt, cParser.get('pool_%s' % options.pool, opt))
 
 	# Setup logging
 	logging.config.fileConfig('logging.conf')
