@@ -36,30 +36,32 @@ def Miner(device, options):
 	platform = cl.get_platforms()[0]
 	devices = platform.get_devices()
 
-
 	class StripMiner(BitcoinMiner):
-		def say(self, format, args=(), sayQuiet=False):
-			p = format % args
-			pool = self.pool[4]+' ' if self.pool else ''
-			log.info("%s %s" % (pool, p))
+		def failure(self, message):
+			log.error(message)
+			self.exit()
 
+	        def say(self, format, args=(), sayQuiet=False):
+			if self.options.quiet and not sayQuiet: return
+			log.info(format % args)
+
+	        def sayLine(self, format, args=()):
+	                self.say(format, args, True)
+
+	        def sayQuiet(self, format, args=()):
+			self.say(format, args, True)
+
+	        def blockFound(self, hash, accepted):
+			self.sayLine('share: %s, %s', (hash, if_else(accepted, 'accepted', '_rejected_')))
+
+	miner = None
 	try:
 		miner = StripMiner(devices[device], options)
 		miner.mine()
 	except:
-		log.info('Miner is exiting', device)
+		log.info('Miner is exiting')
 	finally:
 		if miner: miner.exit()
-
-def sanitizeOption(options, key, val):
-	if key == "verbose" or key == "quiet" or key == "vectors" or key == "nsf":
-		setattr(options, key, (bool)val)
-	elif key == "rate" or "frameSleep":
-		setattr(options, key, (float)val)
-	elif key == "estimate" or key == "askrate" or key == "tolerance" or key == "failback" or key == "worksize" or key == "frames":
-		setattr(options, key, (int)val)
-	else:
-		setattr(options, key, val)
 
 def main():
 	oParser = OptionParser(version=USER_AGENT,
@@ -71,7 +73,7 @@ def main():
 	(options, args) = oParser.parse_args()
 
 	try:
-		cParser = ConfigParser.SafeConfigParser()
+		cParser = ConfigParser.SafeConfigParser({'server' : '%(schema)s://%(user)s:%(password)s@%(host)s:%(port)s' })
 		cParser.read([options.configfile, os.path.expanduser('~/.stripminer.cfg')])
 	except ConfigParser.ParsingError, err:
 		print 'Could not parse:', err
@@ -79,13 +81,15 @@ def main():
 
 	# Define default settings
 	for opt, val in cParser.defaults().iteritems():
-		sanitizeOption(options, opt, val)
+		setattr(options, opt, val)
 
 	# Define pool specific values if specified and available
 	if cParser.has_section('pool_%s' % options.pool):
 		for opt in cParser.options('pool_%s' % options.pool):
-			sanitizeOption(options, opt, cParser.get('pool_%s' % options.pool, opt))
+			setattr(options, opt, cParser.get('pool_%s' % options.pool, opt))
 
+	options.servers = []
+	options.servers.append(options.server)
 	# Setup logging
 	logging.config.fileConfig('logging.conf')
 	log = logging.getLogger('stripminer')

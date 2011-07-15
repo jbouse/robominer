@@ -6,8 +6,7 @@ user = bitcoin
 password = password
 host = 127.0.0.1
 port = 8332
-servers = %(schema)s://%(user)s:%(password)s@%(host)s:%(port)s
-verbose = True
+verbose = False
 quiet = False
 
 # Miner options

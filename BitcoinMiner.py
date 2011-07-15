@@ -110,10 +110,19 @@ class BitcoinMiner():
 		self.defines += (' -DOUTPUT_MASK=' + str(OUTPUT_SIZE - 1))
 
 		self.device = device
-		self.options.rate = max(self.options.rate, 0.1)
-		self.options.askrate = max(self.options.askrate, 1)
-		self.options.askrate = min(self.options.askrate, 10)
-		self.options.frames = max(self.options.frames, 3)
+		self.options.rate = max(float(self.options.rate), 0.1)
+		self.options.askrate = max(int(self.options.askrate), 1)
+		self.options.askrate = min(int(self.options.askrate), 10)
+		self.options.frames = max(int(self.options.frames), 3)
+		self.options.worksize = int(self.options.worksize)
+		self.options.framesleep = float(self.options.framesleep)
+		self.options.estimate = int(self.options.estimate)
+		self.options.tolerance = int(self.options.tolerance)
+		self.options.failback = int(self.options.failback)
+		self.options.nsf = bool(self.options.nsf)
+		self.options.verbose = bool(self.options.verbose)
+		self.options.quiet = bool(self.options.quiet)
+		self.options.vectors = bool(self.options.vectors)
 		self.longPollActive = self.stop = False
 		self.update = True
 		self.lock = RLock()
@@ -431,7 +440,7 @@ class BitcoinMiner():
 
 		work = None
 		while True:
-		        sleep(self.options.frameSleep)
+		        sleep(self.options.framesleep)
 			if self.stop: return
 			if (not work) or (not self.workQueue.empty()):
 				try:
