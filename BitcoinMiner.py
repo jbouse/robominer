@@ -2,6 +2,7 @@ import sys
 import socket
 import httplib
 import traceback
+import collections
 
 import pyopencl as cl
 
@@ -27,7 +28,7 @@ def socketwrap(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
 socket.socket = socketwrap
 
 
-VERSION = '2011.beta4'
+VERSION = '20110709'
 
 USER_AGENT = 'poclbm/' + VERSION
 
@@ -37,7 +38,7 @@ TIMEOUT = 45
 
 LONG_POLL_TIMEOUT = 3600
 
-LONG_POLL_MAX_ASKRATE = 100
+LONG_POLL_MAX_ASKRATE = 120 - TIMEOUT
 
 MAX_REDIRECTS = 3
 
@@ -58,6 +59,10 @@ def if_else(condition, trueVal, falseVal):
 		return trueVal
 	else:
 		return falseVal
+
+def chunks(l, n):
+	for i in xrange(0, len(l), n):
+		yield l[i:i+n]
 
 def patch(data):
 	pos = data.find('\x7fELF', 1)
@@ -89,22 +94,26 @@ def patch(data):
 			pass
 	return data
 
+def calcEfficiency(shares, works):
+	if not works:
+		return "inf "
+	return "%.02f" % (float(shares) / works,)
+
 class NotAuthorized(Exception): pass
 class RPCError(Exception): pass
 
 class BitcoinMiner():
-	def __init__(self, device, host, user, password, port=8332, frames=30, rate=1, askrate=5, worksize=-1, vectors=False, verbose=False):
-		(self.defines, self.rateDivisor, self.hashspace) = if_else(vectors, ('-DVECTORS', 500, 0x7FFFFFFF), ('', 1000, 0xFFFFFFFF))
+	def __init__(self, device, options):
+		self.options = options
+		(self.defines, self.rateDivisor, self.hashspace) = if_else(self.options.vectors, ('-DVECTORS', 500, 0x7FFFFFFF), ('', 1000, 0xFFFFFFFF))
 		self.defines += (' -DOUTPUT_SIZE=' + str(OUTPUT_SIZE))
 		self.defines += (' -DOUTPUT_MASK=' + str(OUTPUT_SIZE - 1))
 
 		self.device = device
-		self.rate = max(float(rate), 0.1)
-		self.askrate = max(int(askrate), 1)
-		self.askrate = min(self.askrate, 10)
-		self.worksize = int(worksize)
-		self.frames = max(int(frames), 1)
-		self.verbose = verbose
+		self.options.rate = max(self.options.rate, 0.1)
+		self.options.askrate = max(self.options.askrate, 1)
+		self.options.askrate = min(self.options.askrate, 10)
+		self.options.frames = max(self.options.frames, 3)
 		self.longPollActive = self.stop = False
 		self.update = True
 		self.lock = RLock()
@@ -118,50 +127,79 @@ class BitcoinMiner():
 		self.workQueue = Queue()
 		self.resultQueue = Queue()
 
-		self.host = '%s:%s' % (host.replace('http://', ''), port)
-		self.postdata = {"method": 'getwork', 'id': 'json'}
-		self.headers = {"User-Agent": USER_AGENT, "Authorization": 'Basic ' + b64encode('%s:%s' % (user, password))}
+		self.backup_pool_index = 1
+		self.errors = 0
+		self.failback_getwork_count = 0
+		self.failback_attempt_count = 0
+		self.pool = None
+
+		self.postdata = {'method': 'getwork', 'id': 'json'}
 		self.connection = None
 
-	def say(self, format, args=()):
+		self.servers = []
+		for pool in self.options.servers:
+			try:
+				temp = pool.split('://', 1)
+				if len(temp) == 1:
+					proto = ''; temp = temp[0]
+				else: proto = temp[0]; temp = temp[1]
+				user, temp = temp.split(':', 1)
+				pwd, host = temp.split('@')
+				if host.find('#') != -1:
+					host, name = host.split('#')
+				else: name = host
+				self.servers.append((proto, user, pwd, host, name))
+			except ValueError:
+				self.sayLine("Ignored invalid server entry: '%s'", pool)
+				continue
+		if not self.servers:
+			self.failure('At least one server is required')
+		else:
+			self.setpool(self.servers[0])
+			self.user_servers = list(self.servers)
+
+	def say(self, format, args=(), sayQuiet=False):
+		if self.options.quiet and not sayQuiet: return
 		with self.outputLock:
-			if self.verbose:
-				print '%s,' % datetime.now().strftime(TIME_FORMAT), format % args
+			p = format % args
+			pool = self.pool[4]+' ' if self.pool else ''
+			if self.options.verbose:
+				print '%s%s,' % (pool, datetime.now().strftime(TIME_FORMAT)), p
 			else:
-				sys.stdout.write('\r%s\r%s' % (' ' * 79, format % args))
+				sys.stdout.write('\r%s\r%s%s' % (' '*80, pool, p))
 			sys.stdout.flush()
 
 	def sayLine(self, format, args=()):
-		if not self.verbose:
+		if not self.options.verbose:
 			format = '%s, %s\n' % (datetime.now().strftime(TIME_FORMAT), format)
 		self.say(format, args)
+		
+	def sayQuiet(self, format, args=()):
+		self.say(format, args, True)
 
 	def exit(self):
 		self.stop = True
 
-	def sayStatus(self, rate, estRate):
+	def sayStatus(self, rate, estRate, eff):
 		rate = Decimal(rate) / 1000
 		estRate = Decimal(estRate) / 1000
 		totShares = self.shareCount[1] + self.shareCount[0]
 		totSharesE = max(totShares, totShares, 1)
-		eff = 0
-		if (self.getworkCount):
-			eff = self.shareCount[1] * 100 / self.getworkCount
-		self.say('[%.03f MH/s (~%d MH/s)] [Rej: %d/%d (%d%%)] [GW: %d (Eff: %d%%)]', (rate, round(estRate), self.shareCount[0], totShares, self.shareCount[0] * 100 / totSharesE, self.getworkCount, eff))
+		totEff = calcEfficiency(self.shareCount[1], self.getworkCount)
+		self.sayQuiet('[%.03f MH/s (~%d MH/s Eff:%s)] [Rej: %d/%d (%d%%)] [GW: %d (Eff:%s)]', (rate, round(estRate), eff, self.shareCount[0], totShares, self.shareCount[0] * 100 / totSharesE, self.getworkCount, totEff))
 
 	def failure(self, message):
 		print '\n%s' % message
 		self.exit()
 
 	def diff1Found(self, hash, target):
-		if self.verbose and target < 0xFFFF0000L:
+		if self.options.verbose and target < 0xFFFF0000L:
 			self.sayLine('checking %s <= %s', (hash, target))
 
 	def blockFound(self, hash, accepted):
-		self.sayLine('%s, %s', (hash, if_else(accepted, 'accepted', 'rejected')))
+		self.sayLine('%s, %s', (hash, if_else(accepted, 'accepted', '_rejected_')))
 
 	def mine(self):
-		self.stop = False
 		longPollThread = Thread(target=self.longPollThread)
 		longPollThread.daemon = True
 		longPollThread.start()
@@ -171,7 +209,7 @@ class BitcoinMiner():
 			if self.stop: return
 			try:
 				with self.lock:
-					update = self.update = (self.update or time() - self.lastWork > if_else(self.longPollActive, LONG_POLL_MAX_ASKRATE, self.askrate))
+					update = self.update = (self.update or time() - self.lastWork > if_else(self.longPollActive, LONG_POLL_MAX_ASKRATE, self.options.askrate))
 				if update:
 					work = self.getwork()
 					if self.update:
@@ -182,18 +220,35 @@ class BitcoinMiner():
 					result = self.resultQueue.get(False)
 					with self.lock:
 						rv = self.sendResult(result)
-					if rv is False:
-						retry.append(result)
-				if retry:
-					for result in retry:
-						self.resultQueue.put(result)
-
+						if rv is False:
+							retry.append(result)
+				for result in retry:
+					self.resultQueue.put(result)
 				sleep(1)
 			except Exception:
 				self.sayLine("Unexpected error:")
 				traceback.print_exc()
 
+	def prepareWork(self, work):
+		if isinstance(work, collections.Iterable):
+			p = work['p'] = {}
+
+			if len(work['data']) == 152: work['data'] += '00000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000080020000'
+			if not 'target' in work: work['target'] = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000'
+
+			data0 = np.zeros(64, np.uint32)
+			data0 = np.insert(data0, [0] * 16, unpack('IIIIIIIIIIIIIIII', work['data'][:128].decode('hex')))
+			p['data']   =             np.array(unpack('IIIIIIIIIIIIIIII', work['data'][128:].decode('hex')), dtype=np.uint32)
+			p['target'] =             np.array(unpack('IIIIIIII',         work['target'].decode('hex')),     dtype=np.uint32)
+			p['state']  =             sha256(STATE, data0)
+
+			p['targetQ']= 2**256 / int(''.join(list(chunks(work['target'], 8))[::-1]), 16)
+			p['f'] = np.zeros(8, np.uint32)
+			p['state2'] = partial(p['state'], p['data'], p['f'])
+			calculateF(p['state'], p['data'], p['f'], p['state2'])
+
 	def queueWork(self, work):
+		self.prepareWork(work)
 		with self.lock:
 			self.workQueue.put(work)
 			if work:
@@ -223,22 +278,74 @@ class BitcoinMiner():
 							self.sayLine('%s, %s', (hashid, 'ERROR (will resend)'))
 							return False
 
-	def getwork(self, data=None):
-		try:
+	def connect(self, proto, host, timeout):
+		if proto == 'https': connector = httplib.HTTPSConnection
+		else: connector = httplib.HTTPConnection
+		return connector(host, strict=True, timeout=timeout)
 
+	def getwork(self, data=None):
+		save_pool = None
+		try:
+			if self.pool != self.servers[0] and self.options.failback > 0:
+				if self.failback_getwork_count >= self.options.failback:
+					save_pool = self.pool
+					self.setpool(self.servers[0])
+					self.connection = None
+					self.sayLine("Attempting to fail back to primary pool")
+				self.failback_getwork_count += 1
 			if not self.connection:
-				self.connection = httplib.HTTPConnection(self.host, strict=True, timeout=TIMEOUT)
+				self.connection = self.connect(self.proto, self.host, TIMEOUT)
 			if data is None:
 				self.getworkCount += 1
 			self.postdata['params'] = if_else(data, [data], [])
 			(self.connection, result) = self.request(self.connection, '/', self.headers, dumps(self.postdata))
+			self.errors = 0
+			if self.pool == self.servers[0]:
+				self.backup_pool_index = 1
+				self.failback_getwork_count = 0
+				self.failback_attempt_count = 0
 			return result['result']
 		except NotAuthorized:
 			self.failure('Wrong username or password')
 		except RPCError as e:
 			self.say('%s', e)
 		except (IOError, httplib.HTTPException, ValueError):
-			self.say('Problems communicating with bitcoin RPC')
+			if save_pool:
+				self.failback_attempt_count += 1
+				self.setpool(save_pool)
+				self.sayLine('Still unable to reconnect to primary pool (attempt %s), failing over', self.failback_attempt_count)
+				self.failback_getwork_count = 0
+				return
+			self.say('Problems communicating with bitcoin RPC %s %s', (self.errors, self.options.tolerance))
+			self.errors += 1
+			if self.errors > self.options.tolerance+1:
+				self.errors = 0
+				if self.backup_pool_index >= len(self.servers):
+					self.sayLine("No more backup pools left. Using primary and starting over.")
+					pool = self.servers[0]
+					self.backup_pool_index = 1
+				else:
+					pool = self.servers[self.backup_pool_index]
+					self.backup_pool_index += 1
+				self.setpool(pool)
+
+	def setpool(self, pool):
+		self.pool = pool
+		proto, user, pwd, host, name = pool
+		self.proto = proto
+		self.host = host
+		#self.sayLine('Setting pool %s (%s @ %s)', (name, user, host))
+		self.sayLine('Setting pool (%s @ %s)', (user, name))
+		self.headers = {"User-Agent": USER_AGENT, "Authorization": 'Basic ' + b64encode('%s:%s' % (user, pwd))}
+		self.connection = None
+
+	def addPools(self, hostList):
+		hosts = loads(hostList)
+		self.servers = list(self.user_servers)
+		for host in hosts[::-1]:
+			pool = self.pool
+			pool = (pool[0], pool[1], pool[2], ''.join([host['host'], ':', str(host['port'])]), pool[4])
+			self.servers.insert(self.backup_pool_index, pool)
 
 	def request(self, connection, url, headers, data=None):
 		result = response = None
@@ -252,35 +359,47 @@ class BitcoinMiner():
 				response.read()
 				url = response.getheader('Location', '')
 				if r == 0 or url == '': raise HTTPException('Too much or bad redirects')
-				connection.request('GET', url, headers=self.headers)
+				connection.request('GET', url, headers=headers)
 				response = connection.getresponse();
 				r -= 1
 			self.longPollURL = response.getheader('X-Long-Polling', '')
 			self.updateTime = response.getheader('X-Roll-NTime', '')
+			hostList = response.getheader('X-Host-List', '')
+			if (not self.options.nsf) and hostList: self.addPools(hostList)
 			result = loads(response.read())
 			if result['error']:	raise RPCError(result['error']['message'])
 			return (connection, result)
 		finally:
-			if not result or not response or response.getheader('connection', '') != 'keep-alive':
+			if not result or not response or (response.version == 10 and response.getheader('connection', '') != 'keep-alive') or response.getheader('connection', '') == 'close':
 				connection.close()
 				connection = None
 
 	def longPollThread(self):
 		connection = None
+		last_host = None
 		while True:
 			if self.stop: return
 			sleep(1)
 			url = self.longPollURL
 			if url != '':
+				proto = self.proto
 				host = self.host
 				parsedUrl = urlsplit(url)
+				if parsedUrl.scheme != '':
+					proto = parsedUrl.scheme
 				if parsedUrl.netloc != '':
 					host = parsedUrl.netloc
 					url = url[url.find(host)+len(host):]
 					if url == '': url = '/'
 				try:
+					if host != last_host and connection:
+						connection.close()
+						connection = None
 					if not connection:
-						connection = httplib.HTTPConnection(host, timeout=LONG_POLL_TIMEOUT)
+						connection = self.connect(proto, host, LONG_POLL_TIMEOUT)
+						self.sayLine("LP connected to %s", self.pool[4])
+						last_host = host
+					
 					self.longPollActive = True
 					(connection, result) = self.request(connection, url, self.headers)
 					self.longPollActive = False
@@ -290,18 +409,15 @@ class BitcoinMiner():
 					self.sayLine('long poll: Wrong username or password')
 				except RPCError as e:
 					self.sayLine('long poll: %s', e)
-				except ValueError as e:
-					self.sayLine('long poll: %s', e)
-				except httplib.HTTPException as e:
-					self.sayLine('long poll: %s', e)
-				except IOError:
-					self.sayLine('long poll exception:')
-					traceback.print_exc()
+				except (IOError, httplib.HTTPException, ValueError):
+					self.sayLine('long poll: IO error')
+					#traceback.print_exc()
+					connection = None
 
 	def miningThread(self):
 		self.loadKernel()
-		frame = 1.0 / self.frames
-		unit = self.worksize * 256
+		frame = 1.0 / self.options.frames
+		unit = self.options.worksize * 256
 		globalThreads = unit * 10
 		
 		queue = cl.CommandQueue(self.context)
@@ -309,13 +425,13 @@ class BitcoinMiner():
 		startTime = lastRatedPace = lastRated = lastNTime = time()
 		accepted = base = lastHashRate = threadsRunPace = threadsRun = 0
 		acceptHist = []
-		f = np.zeros(8, np.uint32)
+		acceptHist.append( (time(), 0, 0) )
 		output = np.zeros(OUTPUT_SIZE+1, np.uint32)
 		output_buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY | cl.mem_flags.USE_HOST_PTR, hostbuf=output)
-		timedelta = 900
 
 		work = None
 		while True:
+		        sleep(self.options.frameSleep)
 			if self.stop: return
 			if (not work) or (not self.workQueue.empty()):
 				try:
@@ -325,16 +441,17 @@ class BitcoinMiner():
 					if not work: continue
 
 					noncesLeft = self.hashspace
-					data   = np.array(unpack('IIIIIIIIIIIIIIII', work['data'][128:].decode('hex')), dtype=np.uint32)
-					state  = np.array(unpack('IIIIIIII',         work['midstate'].decode('hex')),   dtype=np.uint32)
-					target = np.array(unpack('IIIIIIII',         work['target'].decode('hex')),     dtype=np.uint32)
-					state2 = partial(state, data, f)
 
-			self.miner.search(	queue, (globalThreads, ), (self.worksize, ),
+					data = work['p']['data']
+					state = work['p']['state']
+					state2 = work['p']['state2']
+					f = work['p']['f']
+
+			self.miner.search(	queue, (globalThreads, ), (self.options.worksize, ),
 								state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7],
 								state2[1], state2[2], state2[3], state2[5], state2[6], state2[7],
 								pack('I', base),
-								f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7],
+								f[0], f[1], f[2], f[3], f[4],# f[5], f[6], f[7],
 								output_buf)
 			cl.enqueue_read_buffer(queue, output_buf, output)
 
@@ -353,30 +470,23 @@ class BitcoinMiner():
 					globalThreads = max(unit * int((rate * frame * self.rateDivisor) / unit), unit)
 					lastHashRate = rate
 			t = now - lastRated
-			if (t > self.rate):
+			if (t > self.options.rate):
 				rate = int((threadsRun / t) / self.rateDivisor)
 
 				if (len(acceptHist)):
 					LAH = acceptHist.pop()
-					if LAH[1] != self.shareCount[1]:
+					if LAH[1:] != (self.shareCount[1], self.getworkCount):
 						acceptHist.append(LAH)
-				acceptHist.append( (now, self.shareCount[1]) )
-				while (acceptHist[0][0] < now - timedelta):
+				acceptHist.append( (now, self.shareCount[1], self.getworkCount) )
+				while (acceptHist[0][0] < now - self.options.estimate):
 					acceptHist.pop(0)
 				newAccept = self.shareCount[1] - acceptHist[0][1]
-				# FIXME: this next line assumes diff 1: calculate by real target
-				estRate = Decimal(newAccept) * (2**32) / min(int(now - startTime), timedelta) / 1000
+				estRate = Decimal(newAccept) * (work['p']['targetQ']) / min(int(now - startTime), self.options.estimate) / 1000
+				newWork = self.getworkCount - acceptHist[0][2]
+				eff = calcEfficiency(newAccept, newWork)
 
-				self.sayStatus(rate, estRate)
+				self.sayStatus(rate, estRate, eff)
 				lastRated = now; threadsRun = 0
-
-			if self.updateTime == '':
-				if noncesLeft < TIMEOUT * globalThreads * self.frames:
-					self.update = True
-					noncesLeft += 0xFFFFFFFFFFFF
-				elif 0xFFFFFFFFFFF < noncesLeft < 0xFFFFFFFFFFFF:
-					self.sayLine('warning: job finished, miner is idle')
-					work = None
 
 			queue.finish()
 
@@ -385,23 +495,32 @@ class BitcoinMiner():
 				result['work'] = work
 				result['data'] = np.array(data)
 				result['state'] = np.array(state)
-				result['target'] = target
+				result['target'] = work['p']['target']
 				result['output'] = np.array(output)
 				self.resultQueue.put(result)
 				output.fill(0)
 				cl.enqueue_write_buffer(queue, output_buf, output)
 
-			if self.updateTime != '' and now - lastNTime > 1:
+			if self.updateTime == '':
+				if noncesLeft < (TIMEOUT+1) * globalThreads * self.options.frames:
+					self.update = True
+					noncesLeft += 0xFFFFFFFFFFFF
+				elif 0xFFFFFFFFFFF < noncesLeft < 0xFFFFFFFFFFFF:
+					self.sayLine('warning: job finished, miner is idle')
+					work = None
+			elif now - lastNTime > 1:
 				data[1] = bytereverse(bytereverse(data[1]) + 1)
 				state2 = partial(state, data, f)
+				calculateF(state, data, f, state2)
 				lastNTime = now
 
 	def loadKernel(self):
 		self.context = cl.Context([self.device], None, None)
 		if (self.device.extensions.find('cl_amd_media_ops') != -1):
 			self.defines += ' -DBITALIGN'
+			self.defines += ' -DBFI_INT'
 
-		kernelFile = open('BitcoinMiner.cl', 'r')
+		kernelFile = open('phatk.cl', 'r')
 		kernel = kernelFile.read()
 		kernelFile.close()
 		m = md5(); m.update(''.join([self.device.platform.name, self.device.platform.version, self.device.name, self.defines, kernel]))
@@ -421,5 +540,5 @@ class BitcoinMiner():
 		finally:
 			if binary: binary.close()
 
-		if (self.worksize == -1):
-			self.worksize = self.miner.search.get_work_group_info(cl.kernel_work_group_info.WORK_GROUP_SIZE, self.device)
+		if (self.options.worksize == -1):
+			self.options.worksize = self.miner.search.get_work_group_info(cl.kernel_work_group_info.WORK_GROUP_SIZE, self.device)
