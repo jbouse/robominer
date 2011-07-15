@@ -38,14 +38,10 @@ def Miner(device, options):
 
 
 	class StripMiner(BitcoinMiner):
-		def say(self, format, args=()):
-			log.info(format % args)
-
-		def sayLine(self, format, args=()):
-			if(format == 'verification failed, check hardware!'):
-				log.warn(format % args)
-			else:
-				self.say(format, args)
+		def say(self, format, args=(), sayQuiet=False):
+			p = format % args
+			pool = self.pool[4]+' ' if self.pool else ''
+			log.info("%s %s" % (pool, p))
 
 	try:
 		miner = StripMiner(devices[device], options)
