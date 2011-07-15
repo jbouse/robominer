@@ -1,17 +1,29 @@
 ### Default settings and serves as default pool 
 ### configuration for StripMiner
 [DEFAULT]
+schema = http
 user = bitcoin
 password = password
 host = 127.0.0.1
 port = 8332
-rate = 1
-frames = 30
-askrate = 5
-worksize = -1
-vectors = True
-proxy = None
+servers = %(schema)s://%(user)s:%(password)s@%(host)s:%(port)s
 verbose = True
+quiet = False
+
+# Miner options
+rate = 1
+estimate = 900
+askrate = 5
+tolerance = 2
+failback = 10
+nsf = True
+
+# Kernel options
+worksize = -1
+frames = 30
+frameSleep = 0
+vectors = True
+
 logfile = /tmp/stripminer
 
 ### Example of specifying a pool which can be used
